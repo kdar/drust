@@ -1,0 +1,14 @@
+[package]
+name = "drust"
+version = "0.1.0"
+authors = ["Kevin Darlington <kevin@outroot.com>"]
+
+[dependencies]
+pbr = "0.2"
+hyper = "0.9"
+clap = "2.9"
+simplelog = "0.1"
+log = "0.3"
+url = "1.1"
+# scoped-pool = "0.1"
+cue = "0.1"
