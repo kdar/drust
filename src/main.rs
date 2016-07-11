@@ -136,7 +136,7 @@ impl Download {
 
 fn run() -> Result<(), String> {
   let matches = App::new("drust")
-    .version("1.0")
+    .version("0.0.1")
     .author("Kevin Darlington <kevin@outroot.com>")
     .about("Downloader")
     .arg(Arg::with_name("output")
