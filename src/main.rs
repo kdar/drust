@@ -21,6 +21,7 @@ use clap::{Arg, App};
 use std::process::exit;
 use url::Url;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 macro_rules! try_s {
   ($expr:expr) => (match $expr {
@@ -36,7 +37,7 @@ fn check<U: IntoUrl>(url: U) -> Result<u64, String> {
   let res = try_s!(client.get(url)
     .send());
 
-  println!("{:?}", res.headers);
+  // println!("{:?}", res.headers);
 
   if !res.headers.has::<AcceptRanges>() ||
      !res.headers.get::<AcceptRanges>().unwrap().0.contains(&RangeUnit::Bytes) {
@@ -61,7 +62,7 @@ struct Download {
 
 impl Download {
   fn run(&self) -> Result<(), String> {
-    let mut f = File::create(self.output.clone()).unwrap();
+    let mut f = Mutex::new(File::create(self.output.clone()).unwrap());
 
     let chunk_count = (self.size as f64 / self.chunk_size as f64).round() as usize;
     info!("chunk_count: {}", chunk_count);
@@ -80,11 +81,16 @@ impl Download {
       }
     }
 
+    let mut count = 0;
     cue::pipeline("download",
                   self.max_threads,
                   work.iter(),
-                  |item| self.get_part(item.0, item.1),
+                  |item| {
+                    // println!("{}MB - {}MB", item.0 / 1024 / 1024, item.1 / 1024 / 1024);
+                    self.get_part(item.0, item.1)
+                  },
                   |r| {
+      count += 1;
       let data = match r {
         Ok(d) => d,
         Err(e) => {
@@ -92,6 +98,8 @@ impl Download {
           return;
         }
       };
+      // println!("count: {}. data: {}", count, data.1.len());
+      let mut f = f.lock().unwrap();
       f.seek(SeekFrom::Start(data.0)).unwrap();
       f.write(data.1.as_slice()).unwrap();
     });
@@ -100,34 +108,55 @@ impl Download {
   }
 
   fn get_part(&self, start: u64, end: u64) -> Result<(u64, Vec<u8>), String> {
-    let size = end - start;
-
-    let client = Client::new();
-    let req = client.get(&self.url.clone());
-    let mut res = try_s!(req.header(Range::bytes(start, end)).header(Connection::close()).send());
-
-    let mut buf: Vec<u8> = vec![0; size as usize];
+    let mut start_next = start;
+    let mut buf: Vec<u8> = vec![0; (end - start) as usize];
     let mut len = 0;
 
-    loop {
-      match res.read(&mut buf[len..]) {
-        Ok(0) => {
-          buf.truncate(len);
-          return Ok((start, buf));
+    let mut sleep_on_error = 1000;
+    let sleep_max = 10000;
+
+    'outer: loop {
+      let client = Client::new();
+      let req = client.get(&self.url.clone());
+      let mut res =
+        try_s!(req.header(Range::bytes(start_next, end)).header(Connection::close()).send());
+
+      // println!("{}", res.status);
+      if res.status.is_server_error() {
+        std::thread::sleep(Duration::from_millis(sleep_on_error));
+        sleep_on_error = (sleep_on_error as f64 * 1.3) as u64;
+        if sleep_on_error > sleep_max {
+          sleep_on_error = sleep_max;
         }
-        Ok(n) => {
-          len += n;
-          (self.on_update)(n);
-          if len as u64 >= size {
+        continue;
+      }
+
+      loop {
+        match res.read(&mut buf[len..]) {
+          Ok(0) => {
+            // println!("got: {}, expected: {}", len, end - start);
+            if (len as u64) < end - start {
+              start_next = start + len as u64;
+              continue 'outer;
+            }
+
             buf.truncate(len);
             return Ok((start, buf));
           }
-        }
-        // Err(ref e) if e.kind() == ErrorKind::Interrupted => {
-        //   break;
-        // }
-        Err(e) => {
-          return Err(e.to_string());
+          Ok(n) => {
+            len += n;
+            (self.on_update)(n);
+            if len as u64 >= end - start {
+              buf.truncate(len);
+              return Ok((start, buf));
+            }
+          }
+          // Err(ref e) if e.kind() == ErrorKind::Interrupted => {
+          //   break;
+          // }
+          Err(e) => {
+            return Err(e.to_string());
+          }
         }
       }
     }
@@ -175,7 +204,7 @@ fn run() -> Result<(), String> {
     output: output,
     size: size,
     chunk_size: 10 * 1024 * 1024,
-    max_threads: 12,
+    max_threads: 10,
     on_update: Box::new(move |s| {
       let mut pb = pb.lock().unwrap();
       pb.add(s as u64);
