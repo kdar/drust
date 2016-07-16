@@ -9,6 +9,8 @@ extern crate log;
 extern crate simplelog;
 extern crate url;
 extern crate cue;
+#[macro_use]
+extern crate lazy_static;
 
 use simplelog::{TermLogger, LogLevelFilter};
 use hyper::client::{Client, IntoUrl};
@@ -22,6 +24,57 @@ use std::process::exit;
 use url::Url;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::collections::HashMap;
+
+const BYTE: u64 = 1 << 0;
+const KIBYTE: u64 = 1 << 10;
+const MIBYTE: u64 = 1 << 20;
+const GIBYTE: u64 = 1 << 30;
+const TIBYTE: u64 = 1 << 40;
+const PIBYTE: u64 = 1 << 50;
+const EIBYTE: u64 = 1 << 60;
+
+const IBYTE: u64 = 1;
+const KBYTE: u64 = IBYTE * 1000;
+const MBYTE: u64 = KBYTE * 1000;
+const GBYTE: u64 = MBYTE * 1000;
+const TBYTE: u64 = GBYTE * 1000;
+const PBYTE: u64 = TBYTE * 1000;
+const EBYTE: u64 = PBYTE * 1000;
+
+lazy_static! {
+  static ref BYTES_SIZE_TABLE: HashMap<&'static str, u64> = {
+    let mut m = HashMap::new();
+    m.insert("b", BYTE);
+  	m.insert("kib", KIBYTE);
+  	m.insert("kb", KBYTE);
+  	m.insert("mib", MIBYTE);
+  	m.insert("mb", MBYTE);
+  	m.insert("gib", GIBYTE);
+  	m.insert("gb", GBYTE);
+  	m.insert("tib", TIBYTE);
+  	m.insert("tb", TBYTE);
+  	m.insert("pib", PIBYTE);
+  	m.insert("pb", PBYTE);
+  	m.insert("eib", EIBYTE);
+  	m.insert("eb", EBYTE);
+  	// Without suffix
+  	m.insert("", BYTE);
+  	m.insert("ki", KIBYTE);
+  	m.insert("k", KBYTE);
+  	m.insert("mi", MIBYTE);
+  	m.insert("m", MBYTE);
+  	m.insert("gi", GIBYTE);
+  	m.insert("g", GBYTE);
+  	m.insert("ti", TIBYTE);
+  	m.insert("t", TBYTE);
+  	m.insert("pi", PIBYTE);
+  	m.insert("p", PBYTE);
+  	m.insert("ei", EIBYTE);
+  	m.insert("e", EBYTE);
+    m
+  };
+}
 
 macro_rules! try_s {
   ($expr:expr) => (match $expr {
@@ -30,6 +83,73 @@ macro_rules! try_s {
       return std::result::Result::Err(err.to_string());
     }
   })
+}
+
+fn parse_bytes(s: &str) -> Result<u64, String> {
+  let num = s.chars().take_while(|&ch| ch.is_numeric() || ch == '.');
+  let rest = s.chars().skip_while(|&ch| ch.is_numeric() || ch == '.' || ch == ' ');
+  // for ch in iter {
+  //   if !ch.is_numeric() || ch == '.' {
+  //     break;
+  //   }
+  // }
+
+  let mut f = match num.collect::<String>().parse::<f64>() {
+    Ok(v) => v,
+    Err(e) => return Err(e.to_string()),
+  };
+
+  let rest = rest.collect::<String>().to_lowercase();
+  if let Some(&b) = BYTES_SIZE_TABLE.get(rest.as_str()) {
+    f *= b as f64;
+    let f = f as u64;
+    if f >= std::u64::MAX {
+      return Err(format!("too large: {}", s));
+    }
+
+    return Ok(f);
+  }
+
+  Err(format!("unhandled size name: {}", rest))
+}
+
+#[test]
+fn test_parse_bytes() {
+  assert_eq!(parse_bytes("42"), Ok(42));
+  assert_eq!(parse_bytes("42MB"), Ok(42000000));
+  assert_eq!(parse_bytes("42MiB"), Ok(44040192));
+  assert_eq!(parse_bytes("42mb"), Ok(42000000));
+  assert_eq!(parse_bytes("42mib"), Ok(44040192));
+  assert_eq!(parse_bytes("42MIB"), Ok(44040192));
+  assert_eq!(parse_bytes("42 MB"), Ok(42000000));
+  assert_eq!(parse_bytes("42 MiB"), Ok(44040192));
+  assert_eq!(parse_bytes("42 mb"), Ok(42000000));
+  assert_eq!(parse_bytes("42 mib"), Ok(44040192));
+  assert_eq!(parse_bytes("42 MIB"), Ok(44040192));
+  assert_eq!(parse_bytes("42.5MB"), Ok(42500000));
+  assert_eq!(parse_bytes("42.5MiB"), Ok(44564480));
+  assert_eq!(parse_bytes("42.5 MB"), Ok(42500000));
+  assert_eq!(parse_bytes("42.5 MiB"), Ok(44564480));
+  // No need to say B
+  assert_eq!(parse_bytes("42M"), Ok(42000000));
+  assert_eq!(parse_bytes("42Mi"), Ok(44040192));
+  assert_eq!(parse_bytes("42m"), Ok(42000000));
+  assert_eq!(parse_bytes("42mi"), Ok(44040192));
+  assert_eq!(parse_bytes("42MI"), Ok(44040192));
+  assert_eq!(parse_bytes("42 M"), Ok(42000000));
+  assert_eq!(parse_bytes("42 Mi"), Ok(44040192));
+  assert_eq!(parse_bytes("42 m"), Ok(42000000));
+  assert_eq!(parse_bytes("42 mi"), Ok(44040192));
+  assert_eq!(parse_bytes("42 MI"), Ok(44040192));
+  assert_eq!(parse_bytes("42.5M"), Ok(42500000));
+  assert_eq!(parse_bytes("42.5Mi"), Ok(44564480));
+  assert_eq!(parse_bytes("42.5 M"), Ok(42500000));
+  assert_eq!(parse_bytes("42.5 Mi"), Ok(44564480));
+  // Large testing, breaks when too much larger than
+  // this.
+  assert_eq!(parse_bytes("12.5 EB"), Ok((12.5 * EBYTE as f64) as u64));
+  assert_eq!(parse_bytes("12.5 E"), Ok((12.5 * EBYTE as f64) as u64));
+  assert_eq!(parse_bytes("12.5 EiB"), Ok((12.5 * EIBYTE as f64) as u64));
 }
 
 fn check<U: IntoUrl>(url: U) -> Result<u64, String> {
@@ -174,6 +294,14 @@ fn run() -> Result<(), String> {
       .value_name("FILE")
       .help("Sets the output file")
       .takes_value(true))
+    .arg(Arg::with_name("threads")
+      .long("threads")
+      .value_name("COUNT")
+      .help("Max amount of threads to use to download in parallel"))
+    .arg(Arg::with_name("chunk size")
+      .long("chunk-size")
+      .value_name("SIZE")
+      .help("Specify the max chunk size downloaded at a time. (can use KB, MB, KiB, MiB etc..)"))
     .arg(Arg::with_name("URI")
       .help("Sets the URI to download from")
       .required(true)
@@ -191,6 +319,11 @@ fn run() -> Result<(), String> {
   };
 
   let size = try_s!(check(uri));
+  let chunk_size = if matches.is_present("chunk-size") {
+    parse_bytes(matches.value_of("chunk-size").unwrap()).unwrap()
+  } else {
+    5 * 1024 * 1024
+  };
 
   // try_s!(download(uri, output, size, &mut pb));
   let mut pb = ProgressBar::new(size);
@@ -203,8 +336,8 @@ fn run() -> Result<(), String> {
     url: uri.to_owned(),
     output: output,
     size: size,
-    chunk_size: 10 * 1024 * 1024,
-    max_threads: 10,
+    chunk_size: chunk_size,
+    max_threads: matches.value_of("threads").unwrap_or("10").parse::<usize>().unwrap(),
     on_update: Box::new(move |s| {
       let mut pb = pb.lock().unwrap();
       pb.add(s as u64);
