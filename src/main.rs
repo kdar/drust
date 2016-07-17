@@ -180,7 +180,7 @@ impl Download {
     let mut f = Mutex::new(File::create(self.output.clone()).unwrap());
 
     let chunk_count = (self.size as f64 / self.chunk_size as f64).round() as usize;
-    info!("chunk_count: {}", chunk_count);
+    // info!("chunk_count: {}", chunk_count);
 
     let mut work: Vec<(u64, u64)> = vec![];
     if self.chunk_size >= self.size {
