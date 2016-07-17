@@ -88,11 +88,6 @@ macro_rules! try_s {
 fn parse_bytes(s: &str) -> Result<u64, String> {
   let num = s.chars().take_while(|&ch| ch.is_numeric() || ch == '.');
   let rest = s.chars().skip_while(|&ch| ch.is_numeric() || ch == '.' || ch == ' ');
-  // for ch in iter {
-  //   if !ch.is_numeric() || ch == '.' {
-  //     break;
-  //   }
-  // }
 
   let mut f = match num.collect::<String>().parse::<f64>() {
     Ok(v) => v,
@@ -287,7 +282,7 @@ fn run() -> Result<(), String> {
   let matches = App::new("drust")
     .version("0.0.1")
     .author("Kevin Darlington <kevin@outroot.com>")
-    .about("Downloader")
+    .about("Parallel download utility")
     .arg(Arg::with_name("output")
       .short("o")
       .long("output")
